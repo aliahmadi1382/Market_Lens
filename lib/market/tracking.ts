@@ -1,9 +1,10 @@
+import {rememberItems,type KnownItem} from './known-items.ts';
 import {eligible,segmentKey,deduplicate,type Listing,type Research} from './model.ts';
 import {planSearch,type SearchPlan} from './search.ts';
 export const DAY=24*60*60*1000;
 export type PriceEvent={id:string;trackId:string;runId:string;listingId:string;seller:string;title:string;url:string;kind:'price_down'|'price_up'|'undercut';oldPrice:number;newPrice:number;currency:string;ownPrice:number|null;observedAt:string;readAt:string|null};
 export type RunSummary={id:string;trackId:string;query:string;createdAt:string;listingCount:number;sourceErrors:number;sourcePartial:number;eventCount:number;kind:string};
-export type TrackedProduct={id:string;key:string;name:string;query:string;plan:SearchPlan;createdAt:string;updatedAt:string;lastAttemptAt:string|null;lastSuccessAt:string|null;nextRefreshAt:string;latestRunId:string|null;enabled:boolean;leaseUntil:string|null;leaseId:string|null;listingCount:number;status:'ready'|'partial'|'error'|'refreshing';unread:number};
+export type TrackedProduct={knownItems?:KnownItem[];id:string;key:string;name:string;query:string;plan:SearchPlan;createdAt:string;updatedAt:string;lastAttemptAt:string|null;lastSuccessAt:string|null;nextRefreshAt:string;latestRunId:string|null;enabled:boolean;leaseUntil:string|null;leaseId:string|null;listingCount:number;status:'ready'|'partial'|'error'|'refreshing';unread:number};
 export type MarketIndex={version:1;tracks:TrackedProduct[];runs:RunSummary[];notifications:PriceEvent[];updatedAt:string};
 export type Snapshot=Research&{trackId:string;events:PriceEvent[];baseline:Listing[]};
 export const emptyIndex=():MarketIndex=>({version:1,tracks:[],runs:[],notifications:[],updatedAt:new Date().toISOString()});
@@ -44,7 +45,7 @@ export function applySnapshot(index:MarketIndex,track:TrackedProduct,input:Resea
  const snapshot:Snapshot={...input,trackId:track.id,searchPlan:track.plan,listings:rows,events,baseline:mergeBaseline(previous?.baseline||previous?.listings||[],rows)};
  const errors=input.sources.filter(s=>s.status==='error').length;
  const partial=input.sources.some(s=>s.status!=='success');
- const updated:TrackedProduct={...track,latestRunId:input.id,updatedAt:now,lastAttemptAt:now,lastSuccessAt:errors===input.sources.length?track.lastSuccessAt:now,nextRefreshAt:new Date(Date.parse(now)+(errors===input.sources.length?60*60*1000:DAY)).toISOString(),listingCount:rows.length,status:errors===input.sources.length?'error':partial?'partial':'ready',leaseUntil:null,leaseId:null};
+ const updated:TrackedProduct={...track,knownItems:rememberItems(track.knownItems||[],rows,input.sources.flatMap(s=>s.itemChecks||[])),latestRunId:input.id,updatedAt:now,lastAttemptAt:now,lastSuccessAt:errors===input.sources.length?track.lastSuccessAt:now,nextRefreshAt:new Date(Date.parse(now)+(errors===input.sources.length?60*60*1000:DAY)).toISOString(),listingCount:rows.length,status:errors===input.sources.length?'error':partial?'partial':'ready',leaseUntil:null,leaseId:null};
  if(input.kind==='normalization'){updated.lastAttemptAt=track.lastAttemptAt;updated.lastSuccessAt=track.lastSuccessAt;updated.nextRefreshAt=track.nextRefreshAt;updated.status=track.status;updated.leaseId=track.leaseId;updated.leaseUntil=track.leaseUntil;}
  data.tracks=data.tracks.filter(t=>t.id!==track.id);data.tracks.push(updated);
  data.runs.unshift({id:input.id,trackId:track.id,query:input.query,createdAt:now,listingCount:rows.length,sourceErrors:errors,sourcePartial:input.sources.filter(s=>s.status==='partial').length,eventCount:events.length,kind:input.kind||'analysis'});

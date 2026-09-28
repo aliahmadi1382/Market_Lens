@@ -2,6 +2,8 @@ import {load} from 'cheerio/slim';
 import {clean,deduplicate,normalize,type Listing,type Seller} from './model.ts';
 import {planSearch,matchesSearch} from './search.ts';
 import {readPublic,PublicPageError,isChallenge} from './public-http.ts';
+import {parseEbayItem} from './ebay-detail.ts';
+import {queuedItems,type KnownItem,type ItemCheck} from './known-items.ts';
 type EbaySeller=Seller&{deadline?:number};
 const idFromUrl=(url:string)=>url.match(/\/itm\/(?:[^/?]+\/)?(\d{9,15})(?:[/?]|$)/)?.[1];
 const spans=(value:any):string=>typeof value==='string'?value:Array.isArray(value?.textSpans)?value.textSpans.map((x:any)=>x.text||'').join(' '):'';
@@ -64,7 +66,7 @@ export function parseEbaySearch(html:string,source:Seller,query:string,url:strin
   if(!isStore&&(!source.ebay?.sellerId||![seller,sellerText].some(t=>t.startsWith(source.ebay!.sellerId!.toLowerCase()+' ')||t===source.ebay!.sellerId!.toLowerCase()))){unverified++;return;}
   inspected++;
   const title=clean(card.find('.str-item-card__property-title, .s-item__title, .s-card__title').first().text()||spans(model?.title));
-  if(!matchesSearch(title,query))return;
+  if(!matchesSearch(title,planSearch(query).product))return;
   const priceText=clean(card.find('.str-item-card__property-displayPrice, .s-item__price, .s-card__price').first().text()||spans(model?.displayPrice));
   const amount=model?.displayPrice?.value;const range=/\bto\b|\bfrom\b|[–—]|\s-\s/i.test(priceText);
   const currency=typeof amount?.currency==='string'&&/^[A-Z]{3}$/.test(amount.currency)?amount.currency:/\bUS\s*\$/.test(priceText)?'USD':/£|\bGBP\b/.test(priceText)?'GBP':/€|\bEUR\b/.test(priceText)?'EUR':'XXX';
@@ -72,12 +74,12 @@ export function parseEbaySearch(html:string,source:Seller,query:string,url:strin
   const price=!range&&currency!=='XXX'&&Number.isFinite(numeric)&&numeric>0?numeric:null;
   const condition=clean(model?.__search?.normalizedCondition?.text||card.find('.s-item__subtitle, .s-card__subtitle').first().text());
   itemUrl.search='';itemUrl.hash='';
-  rows.push({...normalize({id:`ebay:${id}`,title,seller:source.name,url:itemUrl.toString(),image:card.find('img').first().attr('src')||null,price,currency,priceContext:`ebay:${itemUrl.hostname}:published:v1`,available:null,condition:/^(Brand )?New\b/i.test(condition)?'New':condition||'Unknown',warnings:['Public eBay listing; exact selectable variations may not be exposed.',...(range?['Published price is a range; excluded from exact-price analysis.']:currency==='XXX'?['Published currency could not be verified; price excluded.']:[])]}),displayedPrice:priceText});
+  rows.push({...normalize({id:`ebay:${id}`,title,seller:source.name,url:itemUrl.toString(),image:card.find('img').first().attr('src')||null,price,currency,priceContext:`ebay:${itemUrl.hostname}:published:v1`,available:null,condition:/^(Brand )?New\b/i.test(condition)?'New':condition||'Unknown',warnings:['Public eBay listing; exact selectable variations may not be exposed.',...(range?['Published price is a range; excluded from exact-price analysis.']:currency==='XXX'?['Published currency could not be verified; price excluded.']:[])]}),displayedPrice:priceText,variationCoverage:'unread'});
  });
  const noMatches=/0 results|no (?:matching )?(?:results|items|listings)|couldn.t find any results/i.test($('.str-items-grid, .srp-controls, .srp-save-null-search, .srp-river-answer').text());
  if(!cards.length&&!noMatches)throw new PublicPageError('eBay returned no recognizable search results. This is not evidence of an empty catalog.');
  const next=$('a.pagination__next').attr('href');
- return{listings:deduplicate(rows),hasNext:!!next,inspected,unverified,noMatches};
+ return{listings:deduplicate(rows.filter(r=>matchesSearch(r.title,query))),candidates:rows.filter(r=>!r.years.length),hasNext:!!next,inspected,unverified,noMatches};
 }
 export function enrichEbayListing(html:string,row:Listing){
  const $=load(html);const title=clean($('.x-item-title__mainTitle').first().text());
@@ -89,24 +91,40 @@ export function enrichEbayListing(html:string,row:Listing){
  const normalized=normalize({...row,title},fields);
  return{...normalized,displayedPrice:row.displayedPrice,available:$('.x-ended-listing, .vi-ended-listing').length?false:row.available,years:row.years};
 }
-export async function collectEbay(source:EbaySeller,query:string){
+export async function collectEbay(source:EbaySeller,query:string,knownItems:KnownItem[]=[]){
  const reader={domain:new URL(source.ebay!.url).hostname,deadline:source.deadline};
- const listings:Listing[]=[];let pages=0,storefront=0,inspected=0,unverified=0,capped=false,detailErrors=0;let blocked=false,problem='';let scoped:Seller=source;
+ const listings:Listing[]=[],candidates:Listing[]=[],itemChecks:ItemCheck[]=[];
+ const saved=queuedItems(knownItems,source.name),checked=new Set<string>();
+ let pages=0,storefront=0,inspected=0,unverified=0,capped=false,detailErrors=0,details=0,blocked=false,problem='';let scoped:Seller=source;
+ const readItem=async(url:string)=>{
+  details++;checked.add(url);const check={seller:source.name,url,lastCheckedAt:new Date().toISOString()};
+  try{const rows=parseEbayItem(await readPublic(url,reader),source,query,url);itemChecks.push({...check,outcome:rows.length?'matched':'not_matched',message:rows.length?`${rows.length} published observations`:'Published title and specifics did not match this search.'});
+   // Replace a search card with its item/variant observations, never count both.
+   const id=idFromUrl(url);for(let i=listings.length-1;i>=0;i--)if(idFromUrl(listings[i].url)===id)listings.splice(i,1);
+   listings.push(...rows);
+  }catch(e){detailErrors++;const message=e instanceof Error?e.message:'Item read failed';const denied=e instanceof PublicPageError&&e.outcome==='blocked';itemChecks.push({...check,outcome:denied?'blocked':'failed',message});if(denied){blocked=true;problem=message;}}
+ };
+ // Retain a readable storefront sample, then prioritize saved pages before discovery.
  if(new URL(source.ebay!.url).pathname.startsWith('/str/')){
-  const html=await readPublic(source.ebay!.url,reader);const sample=parseEbaySearch(html,source,query,source.ebay!.url);
-  listings.push(...sample.listings);storefront=sample.inspected;
-  try{scoped=resolveEbaySeller(html,source);}catch(e){problem=e instanceof Error?e.message:'Seller identity unavailable';}
+  try{const html=await readPublic(source.ebay!.url,reader);const sample=parseEbaySearch(html,source,query,source.ebay!.url);
+   listings.push(...sample.listings);candidates.push(...sample.candidates);storefront=sample.inspected;
+   try{scoped=resolveEbaySeller(html,source);}catch(e){problem=e instanceof Error?e.message:'Seller identity unavailable';}
+  }catch(e){blocked=e instanceof PublicPageError&&e.outcome==='blocked';problem=e instanceof Error?e.message:'Storefront unavailable';}
  }
- if(!problem)for(let page=1;page<=4;page++){
-  try{const url=ebaySearchUrl(scoped,query,page);const result=parseEbaySearch(await readPublic(url,reader),scoped,query,url);pages++;listings.push(...result.listings);inspected+=result.inspected;unverified+=result.unverified;
-   if(!result.hasNext)break;if(page===4)capped=true;
+ if(!blocked)for(const item of saved.slice(0,100)){await readItem(item.url);if(blocked||source.deadline&&Date.now()>=source.deadline)break;}
+ if(!problem&&!blocked)for(let page=1;page<=20;page++){
+  try{const url=ebaySearchUrl(scoped,query,page);const result=parseEbaySearch(await readPublic(url,reader),scoped,query,url);pages++;listings.push(...result.listings);candidates.push(...result.candidates);inspected+=result.inspected;unverified+=result.unverified;
+   if(!result.hasNext)break;if(page===20)capped=true;
   }catch(e){blocked=e instanceof PublicPageError&&e.outcome==='blocked';problem=e instanceof Error?e.message:'Search failed';break;}
  }
- const rows=deduplicate(listings);
- if(!blocked&&!problem)for(let i=0;i<Math.min(rows.length,12);i++){
-  try{rows[i]=enrichEbayListing(await readPublic(rows[i].url,reader),rows[i]);}
-  catch(e){detailErrors++;if(e instanceof PublicPageError&&e.outcome==='blocked'){blocked=true;problem=e.message;break;}}
+ if(!blocked)for(const row of deduplicate([...listings,...candidates]).filter(r=>!checked.has(r.url))){
+  if(details>=100||source.deadline&&Date.now()>=source.deadline){capped=true;break;}await readItem(row.url);if(blocked)break;
  }
+ // Search cards added after a saved variant read must not duplicate that parent.
+ const detailedIds=new Set(listings.filter(r=>r.variationCoverage&&r.variationCoverage!=='unread').map(r=>idFromUrl(r.url)));
+ const unique=deduplicate(listings.filter(r=>r.variationCoverage!=='unread'||!detailedIds.has(idFromUrl(r.url))));
+ if(unique.length>2000)capped=true;const rows=unique.slice(0,2000);
+ const pending=saved.filter(k=>!checked.has(k.url)).length,unread=rows.filter(r=>r.variationCoverage==='unread').length;
  const plan=planSearch(query);
- return{listings:rows,partial:capped||unverified>0||detailErrors>0||rows.length>12||!!problem||rows.some(r=>r.price===null),blocked,searchUrl:ebaySearchUrl(scoped,query),message:`eBay: ${pages} keyword-search pages (${inspected} verified seller listings), plus ${storefront} storefront sample listings checked against ${plan.minYear??'all'}–${plan.maxYear??'years'}; ${rows.length} matched. ${unverified} listings excluded because seller identity was unverified. ${detailErrors} detail errors. Up to 4 search pages and 12 detail pages; price ranges are research-only. ${capped?'Search page limit reached. ':''}${problem}`};
+ return{listings:rows,itemChecks,partial:capped||unverified>0||detailErrors>0||pending>0||unread>0||!!problem||rows.some(r=>r.price===null||r.variationCoverage==='options_only'||r.warnings.some(w=>w.includes('variation limit reached'))),blocked,searchUrl:ebaySearchUrl(scoped,query),message:`eBay: ${pages} keyword-search pages (${inspected} verified seller listings), plus ${storefront} storefront sample listings checked against ${plan.minYear??'all'}–${plan.maxYear??'years'}; ${rows.length} observations. ${details} item pages attempted; ${pending} saved links still pending; ${unread} observations have unread variations. ${unverified} seller identity exclusions; ${detailErrors} detail errors. Up to 20 search pages, 100 detail pages and 2,000 observations within 90 seconds; coverage may be incomplete. ${capped?'Collection limit reached. ':''}${problem}`};
 }

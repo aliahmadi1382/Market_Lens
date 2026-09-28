@@ -16,7 +16,7 @@ for(const item of due){
  try{
   console.log(`Refreshing ${track.name}; ${track.plan.minYear??'all'}–${track.plan.maxYear??'years'}`);
   const sources=COLLECTION_SOURCES;const results=[];
-  for(let i=0;i<sources.length;i+=2)results.push(...await Promise.all(sources.slice(i,i+2).map(s=>collectSource(s.id,track.query))));
+  for(let i=0;i<sources.length;i+=2)results.push(...await Promise.all(sources.slice(i,i+2).map(s=>collectSource(s.id,track.query,track.knownItems||[]))));
   const research:Research={id:crypto.randomUUID(),query:track.query,createdAt:new Date().toISOString(),listings:deduplicate(results.flatMap(r=>r.listings)),sources:results.map(r=>r.source),kind:'refresh',searchPlan:track.plan};
   const saved=await saveResearch(store,research);
   console.log(`Saved ${saved.listings.length} variants; ${saved.events.length} price notifications; ${saved.sources.filter(s=>s.status==='error').length} source errors.`);

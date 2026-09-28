@@ -1,4 +1,5 @@
 import {matchesSearch,yearValues} from './search.ts';
+import type {ItemCheck} from './known-items.ts';
 export type Group = 'own' | 'primary' | 'reference' | 'unclassified';
 export type Seller = {name:string; group:Group; domain?:string; adapter?:'shopify'|'woo'; ebay?:{url:string;sellerId?:string}};
 export const SELLERS:Seller[] = [
@@ -27,13 +28,14 @@ export const COLLECTION_SOURCES:CollectionSource[]=SELLERS.flatMap(s=>{
 });
 export const GROUP_NAMES:Record<Group,string> = {own:'Our Listings',primary:'Primary Competitors',reference:'Color & Material References',unclassified:'Unclassified'};
 export type Listing = {
+ variationCoverage?:'unread'|'options_only'|'published_variants'|'no_options_exposed'; variationOptions?:{name:string;values:string[]}[]; parentListingId?:string;
  displayedPrice?:string; priceContext?:string; unverifiedPrice?:number; unverifiedCurrency?:string; id:string; title:string; seller:string; group:Group; url:string; image:string|null; price:number|null; currency:string; shipping:number|null;
  available:boolean|null; originalColor:string; color:string; originalMaterial:string; material:string; colorEvidence:string; materialEvidence:string;
  configuration:string; finish:string; years:number[]; model:string; variant:string; collectedAt:string; condition:string; sold:number|null;
  warnings:string[];
 };
 export type SourceOutcome='matches'|'no_matches'|'partial'|'blocked'|'failed'|'not_configured';
-export type SourceStatus={sourceId?:string;channel?:CollectionSource['channel'];outcome?:SourceOutcome;searchUrl?:string;seller:string;status:'success'|'partial'|'error';count:number;message:string;url:string;collectedAt:string};
+export type SourceStatus={sourceId?:string;channel?:CollectionSource['channel'];outcome?:SourceOutcome;searchUrl?:string;itemChecks?:ItemCheck[];seller:string;status:'success'|'partial'|'error';count:number;message:string;url:string;collectedAt:string};
 export type Research={id:string;query:string;createdAt:string;listings:Listing[];sources:SourceStatus[];trackId?:string;kind?:'analysis'|'refresh'|'normalization';searchPlan?:import('./search.ts').SearchPlan};
 export type Evidence={name:string;text:string};
 export const clean=(v:unknown)=>String(v??'').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,' ').replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/&amp;/g,'&').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;|&apos;/g,"'").replace(/&nbsp;/g,' ').replace(/&#(\d+);/g,(_,n)=>String.fromCharCode(Number(n))).replace(/\s+/g,' ').trim();
