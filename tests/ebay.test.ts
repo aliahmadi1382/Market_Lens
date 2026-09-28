@@ -4,6 +4,7 @@ import {parseEbaySearch,ebaySearchUrl,enrichEbayListing,resolveEbaySeller} from 
 import {readPublic,PublicPageError,isChallenge} from '../lib/market/public-http.ts';
 import {collectSource} from '../lib/market/collectors.ts';
 import {SELLERS,COLLECTION_SOURCES,eligible} from '../lib/market/model.ts';
+import {ebaySellerUrl} from '../lib/market/ebay-urls.ts';
 const source=SELLERS.find(s=>s.name==='u.s.autoseatcover')!;
 const title='2003-2007 Cadillac CTS Driver Bottom Black Leather Seat Cover';
 const item=(id:string,text=title,priceText='$120.00',currency='USD',seller='u.s.autoseatcover')=>({id,text,priceText,currency,seller});
@@ -63,4 +64,23 @@ test('store slugs resolve to verified seller search instead of an ignored storef
 test('embedded anti-spam scripts do not mark a readable store page as blocked',()=>{
  assert.equal(isChallenge('<title>Search products</title><script>const message="Verify you are human";</script><article>Cadillac CTS leather cover</article>'),false);
  assert.equal(isChallenge('<title>Security Measure | eBay</title><p>Continue</p>'),true);
+});
+
+test('supplied account links retain exact seller IDs, marketplace and broad product search',()=>{
+ const accounts=[['u.s.autoseatcover','u.s.autoseatcover'],['Master Auto Upholstery','masterautoupholstery'],['US Auto Seat Factory','usautoseats'],['Premium Auto Seat Covers','premium_auto-seat_covers'],['DSA Seat Factory','dsa.seat.factory'],['Lone Star Seat Covers','lonestarseatcovers'],['seatcoverreplacement','seatcoverreplacement'],['US Leather Car Seats','usleathercarseats'],['Seat Pro','seatpro'],['AutoChampOfTexas','autochampoftexas']];
+ for(const [name,id] of accounts){const seller=SELLERS.find(s=>s.name===name)!;const url=new URL(ebaySearchUrl(seller,'Toyota Tacoma 2005–2015',2));
+  assert.equal(url.pathname,'/sch/i.html');assert.equal(url.searchParams.get('_ssn'),id);assert.equal(url.searchParams.get('_nkw'),'Toyota Tacoma');assert.equal(url.searchParams.get('_oac'),'1');assert.equal(url.searchParams.get('_pgn'),'2');assert.equal(url.hostname,name==='DSA Seat Factory'?'www.ebay.co.uk':'www.ebay.com');
+ }
+});
+test('seller URLs discard tracking parameters and single-item context',()=>{
+ const seller={...source,ebay:{url:'https://www.ebay.com/sch/i.html?item=306332351411&rt=nc&_trksid=tracking&_ssn=premium_auto-seat_covers#section'}};
+ assert.equal(ebaySellerUrl(seller),'https://www.ebay.com/sch/i.html?_ssn=premium_auto-seat_covers&_oac=1');
+});
+test('configured seller identity does not depend on a storefront search action',async()=>{
+ const original=globalThis.fetch;const calls:string[]=[];
+ const html=fixture().replace('"searchAction":', '"unused":').replace('https://www.ebay.com/sch/i.html?_ssn=u.s.autoseatcover&store_name=usautoseatcover','https://www.ebay.com/');
+ globalThis.fetch=async(input)=>{calls.push(String(input));return calls.length===1?new Response(html):new Response('',{status:403})};
+ try{const result=await collectSource('ebay:u.s.autoseatcover','Cadillac CTS 2003-2007');
+  assert.equal(calls.length,2);assert.equal(new URL(calls[1]).searchParams.get('_ssn'),'u.s.autoseatcover');assert.equal(result.source.outcome,'blocked');assert.equal(result.listings.length,1);
+ }finally{globalThis.fetch=original;}
 });

@@ -2,6 +2,7 @@
 import {ExternalLink,Info,TriangleAlert,Check,Globe2} from 'lucide-react';
 import {COLLECTION_SOURCES,SELLERS,type SourceStatus,type Seller} from '@/lib/market/model';
 import {date} from './market-ui';
+import {ebaySellerUrl} from '@/lib/market/ebay-urls';
 export function sourceOutcome(s:SourceStatus){return s.outcome||(s.status==='error'?'failed':s.status==='partial'?'partial':s.count?'matches':'no_matches');}
 const labels:Record<string,string>={matches:'Matches found',no_matches:'No matches in searched pages',partial:'Partial coverage',blocked:'Blocked by source',failed:'Search failed',not_configured:'Link needed'};
 export function CoverageSummary({sources,onDetails,busy}:{sources:SourceStatus[];onDetails:()=>void;busy:boolean}){
@@ -15,4 +16,4 @@ export function SourceReports({sources,busy}:{sources:SourceStatus[];busy:boolea
   return <div className="source-status" key={config.id}><span className={'source-state '+(outcome==='matches'?'success':['failed','blocked'].includes(outcome)?'error':'partial')}>{outcome==='matches'?<Check size={17}/>:['failed','blocked'].includes(outcome)?<TriangleAlert size={17}/>:<Info size={17}/>}</span><div><strong>{config.seller}<b>{s?.count??0} observations</b></strong><small>{config.channel==='ebay'?'eBay':config.channel==='website'?'Website':'Unconfigured'} · {labels[outcome]||(busy?'Waiting for result':'Not searched in this snapshot')}</small><p>{s?.message||(config.channel==='unconfigured'?'Provide this account’s public store URL to enable collection.':busy?'Queued or collecting public pages.':'Run Analyze Market to include this source.')}</p><small>{s?date(s.collectedAt):''}{config.url&&<> · <a href={s?.searchUrl||config.url} target="_blank" rel="noreferrer">{config.channel==='ebay'?'Open eBay search':'Open website'} <ExternalLink size={11}/></a></>}</small></div></div>;
  })}</div>;
 }
-export function AccountLinks({seller:s}:{seller:Seller}){return <div className="account-source-links">{s.domain&&<a href={'https://'+s.domain} target="_blank" rel="noreferrer">Website <ExternalLink size={12}/></a>}{s.ebay&&<a href={s.ebay.url} target="_blank" rel="noreferrer">eBay <ExternalLink size={12}/></a>}</div>}
+export function AccountLinks({seller:s}:{seller:Seller}){return <div className="account-source-links">{s.domain&&<a href={'https://'+s.domain} target="_blank" rel="noreferrer">Website <ExternalLink size={12}/></a>}{s.ebay&&<a href={ebaySellerUrl(s)} target="_blank" rel="noreferrer">eBay <ExternalLink size={12}/></a>}</div>}

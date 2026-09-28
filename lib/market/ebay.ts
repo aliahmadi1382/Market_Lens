@@ -4,15 +4,16 @@ import {planSearch,matchesSearch} from './search.ts';
 import {readPublic,PublicPageError,isChallenge} from './public-http.ts';
 import {parseEbayItem} from './ebay-detail.ts';
 import {queuedItems,type KnownItem,type ItemCheck} from './known-items.ts';
+import {ebaySellerUrl} from './ebay-urls.ts';
 type EbaySeller=Seller&{deadline?:number};
 const idFromUrl=(url:string)=>url.match(/\/itm\/(?:[^/?]+\/)?(\d{9,15})(?:[/?]|$)/)?.[1];
 const spans=(value:any):string=>typeof value==='string'?value:Array.isArray(value?.textSpans)?value.textSpans.map((x:any)=>x.text||'').join(' '):'';
 export function ebaySearchUrl(source:Seller,query:string,page=1){
  if(!source.ebay)throw new Error('eBay store is not configured');
- const url=new URL(source.ebay.url);const plan=planSearch(query);
+ const url=new URL(ebaySellerUrl(source));const plan=planSearch(query);
  // Broad product discovery avoids losing listings that publish only a range's endpoints.
  // Every year in the expanded window is checked locally against each listing's fitment.
- if(url.pathname.startsWith('/str/')){if(!source.ebay.sellerId)return url.toString();url.pathname='/sch/i.html';url.searchParams.set('_ssn',source.ebay.sellerId);url.searchParams.set('store_name',source.ebay.url.split('/').at(-1)!);}
+ if(url.pathname.startsWith('/str/'))return url.toString();
  url.searchParams.set('_nkw',plan.product);
  url.searchParams.set('_pgn',String(page));url.searchParams.set('_ipg','48');return url.toString();
 }
@@ -108,7 +109,7 @@ export async function collectEbay(source:EbaySeller,query:string,knownItems:Know
  if(new URL(source.ebay!.url).pathname.startsWith('/str/')){
   try{const html=await readPublic(source.ebay!.url,reader);const sample=parseEbaySearch(html,source,query,source.ebay!.url);
    listings.push(...sample.listings);candidates.push(...sample.candidates);storefront=sample.inspected;
-   try{scoped=resolveEbaySeller(html,source);}catch(e){problem=e instanceof Error?e.message:'Seller identity unavailable';}
+   if(!source.ebay!.sellerId)try{scoped=resolveEbaySeller(html,source);}catch(e){problem=e instanceof Error?e.message:'Seller identity unavailable';}
   }catch(e){blocked=e instanceof PublicPageError&&e.outcome==='blocked';problem=e instanceof Error?e.message:'Storefront unavailable';}
  }
  if(!blocked)for(const item of saved.slice(0,100)){await readItem(item.url);if(blocked||source.deadline&&Date.now()>=source.deadline)break;}
