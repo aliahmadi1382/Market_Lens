@@ -1,9 +1,9 @@
 import {planSearch} from './search.ts';
 import {SELLERS,clean,normalize,matchesQuery,deduplicate,type Listing,type SourceStatus,type Seller} from './model.ts';
 const MAX_BYTES=4_000_000;
-async function readPublic(url:string,source:Seller){
+async function readPublic(url:string,source:Seller,headers:Record<string,string>={}){
  const target=new URL(url);if(target.protocol!=='https:'||target.hostname!==source.domain||target.username||target.password)throw new Error('Unsupported source URL');
- const response=await fetch(target,{redirect:'error',signal:AbortSignal.timeout(18000),headers:{Accept:'application/json,text/html;q=0.8','User-Agent':'MarketLens/1.0 public-product-research'}});
+ const response=await fetch(target,{redirect:'error',signal:AbortSignal.timeout(18000),headers:{Accept:'application/json,text/html;q=0.8','User-Agent':'MarketLens/1.0 public-product-research',...headers}});
  if(!response.ok)throw new Error(`Store returned HTTP ${response.status}`);
  const reader=response.body?.getReader();if(!reader)throw new Error('Empty response');let size=0;const chunks:Uint8Array[]=[];
  while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>MAX_BYTES){await reader.cancel();throw new Error('Store response exceeded size limit');}chunks.push(value);}
@@ -12,11 +12,15 @@ async function readPublic(url:string,source:Seller){
 function sourceQuery(q:string){const t=q.replace(/chevy|chevrolet|seat covers?|replacement|\bto\b/gi,'').replace(/\b(?:19|20)\d{2}\b/g,'').replace(/[^a-z0-9 ]/gi,' ').trim();const y=q.match(/\b(?:19|20)\d{2}\b/);return`${t}${y?' '+y[0]:''}`.trim()||q;}
 async function shopify(source:Seller,q:string){
  const origin='https://'+source.domain;const plan=planSearch(q);
+ // Read-only storefront requests share an explicit US/USD context on every host.
+ const readShopify=(url:string)=>{const u=new URL(url);u.searchParams.set('currency','USD');return readPublic(u.toString(),source,{Cookie:'localization=US; cart_currency=USD'});};
+ const cart=JSON.parse(await readShopify(origin+'/cart.js'));
+ if(cart.currency!=='USD')throw new Error('Storefront USD currency could not be verified; prices were not collected.');
  const discovered:any[]=[];let searchErrors=0,capped=false;
  for(let offset=0;offset<plan.searchTerms.length;offset+=3){
   const results=await Promise.allSettled(plan.searchTerms.slice(offset,offset+3).map(async term=>{
    const search=new URL('/search/suggest.json',origin);search.searchParams.set('q',sourceQuery(term));search.searchParams.set('resources[type]','product');search.searchParams.set('resources[limit]','10');search.searchParams.set('resources[options][unavailable_products]','show');
-   const raw=JSON.parse(await readPublic(search.toString(),source));const products=raw.resources?.results?.products;if(!Array.isArray(products))throw new Error('Public product search unavailable');return products;
+   const raw=JSON.parse(await readShopify(search.toString()));const products=raw.resources?.results?.products;if(!Array.isArray(products))throw new Error('Public product search unavailable');return products;
   }));
   for(const result of results){if(result.status==='fulfilled'){discovered.push(...result.value);if(result.value.length>=10)capped=true}else searchErrors++}
  }
@@ -24,21 +28,21 @@ async function shopify(source:Seller,q:string){
  let candidates=[...new Map(discovered.filter((p:any)=>matchesQuery(p.title,q)).map((p:any)=>[new URL(p.url,origin).pathname,p])).values()];
  if(!candidates.length){
   const searchPage=new URL('/search',origin);searchPage.searchParams.set('type','product');searchPage.searchParams.set('q',plan.product);
-  try{const html=await readPublic(searchPage.toString(),source);const paths=[...new Set([...html.matchAll(/href=["']([^"']*\/products\/[^"']+)["']/gi)].map(m=>{try{const u=new URL(m[1].replace(/&amp;/g,'&'),origin);return u.hostname===source.domain?u.pathname:null}catch{return null}}).filter(Boolean))].slice(0,30);candidates=paths.map(path=>({url:path,title:''}));capped=true;}catch{searchErrors++}
+  try{const html=await readShopify(searchPage.toString());const paths=[...new Set([...html.matchAll(/href=["']([^"']*\/products\/[^"']+)["']/gi)].map(m=>{try{const u=new URL(m[1].replace(/&amp;/g,'&'),origin);return u.hostname===source.domain?u.pathname:null}catch{return null}}).filter(Boolean))].slice(0,30);candidates=paths.map(path=>({url:path,title:''}));capped=true;}catch{searchErrors++}
  }
  if(candidates.length>100){candidates=candidates.slice(0,100);capped=true;}
  let failed=0;const collected:Listing[]=[];
  for(let i=0;i<candidates.length;i+=3){const slice=await Promise.allSettled(candidates.slice(i,i+3).map(async(p:any)=>{
-  const url=new URL(p.url,origin);url.search='';url.hash='';const payload=JSON.parse(await readPublic(url.toString()+'.js',source));
+  const url=new URL(p.url,origin);url.search='';url.hash='';const payload=JSON.parse(await readShopify(url.toString()+'.js'));
   if(!matchesQuery(payload.title,q))return [];
   const options=payload.options||[];
   return(payload.variants||[]).slice(0,100).map((v:any)=>{
    const variant=clean(v.public_title||v.title);const attributes=options.map((o:any,k:number)=>`${o.name||o}: ${v.options?.[k]||''}`).join('; ');
-   return normalize({id:`${source.domain}:${payload.id}:${v.id}`,title:payload.title||p.title,seller:source.name,url:url.toString()+'?variant='+v.id,image:payload.featured_image?new URL(payload.featured_image,origin).toString():null,price:typeof v.price==='number'?v.price/100:null,currency:'USD',available:typeof v.available==='boolean'?v.available:null,variant},[
+   return normalize({id:`${source.domain}:${payload.id}:${v.id}`,title:payload.title||p.title,seller:source.name,url:url.toString()+'?variant='+v.id+'&currency=USD',image:payload.featured_image?new URL(payload.featured_image,origin).toString():null,price:typeof v.price==='number'?v.price/100:null,currency:'USD',priceContext:'shopify:US:USD:v1',available:typeof v.available==='boolean'?v.available:null,variant},[
     {name:'Variation data',text:attributes+' '+variant},{name:'Structured attributes',text:clean(payload.tags?.join?.(' ')||payload.tags||'')},{name:'Description content',text:clean(payload.description)}]);
   });
  }));for(const s of slice){if(s.status==='fulfilled')collected.push(...s.value);else failed++;}}
- return{listings:collected.slice(0,2000),message:`Searched the product and every year ${plan.minYear??''}–${plan.maxYear??''}. ${plan.searchTerms.length} searches; ${candidates.length} matching product pages. Public suggestions return at most 10 products per search; maximum 100 product pages and 2,000 variants. ${searchErrors} search errors; ${failed} page errors. Item-only USD prices; sales unavailable.`,partial:capped||failed>0||searchErrors>0||collected.length>2000};
+ return{listings:collected.slice(0,2000),message:`Searched the product and every year ${plan.minYear??''}–${plan.maxYear??''}. ${plan.searchTerms.length} searches; ${candidates.length} candidate product pages. Public suggestions return at most 10 products per search; maximum 100 product pages and 2,000 variants. ${searchErrors} search errors; ${failed} page errors. Item-only USD prices verified from the public currency endpoint; US storefront context. Sales unavailable.`,partial:capped||failed>0||searchErrors>0||collected.length>2000};
 }
 async function woo(source:Seller,q:string){
  const base='https://'+source.domain;const url=new URL('/wp-json/wc/store/v1/products',base);url.searchParams.set('search',sourceQuery(q).replace(/\b\d{4}\b/g,'').trim());url.searchParams.set('per_page','30');

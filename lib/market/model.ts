@@ -13,7 +13,7 @@ export const SELLERS:Seller[] = [
 ];
 export const GROUP_NAMES:Record<Group,string> = {own:'Our Listings',primary:'Primary Competitors',reference:'Color & Material References',unclassified:'Unclassified'};
 export type Listing = {
- id:string; title:string; seller:string; group:Group; url:string; image:string|null; price:number|null; currency:string; shipping:number|null;
+ priceContext?:string; unverifiedPrice?:number; unverifiedCurrency?:string; id:string; title:string; seller:string; group:Group; url:string; image:string|null; price:number|null; currency:string; shipping:number|null;
  available:boolean|null; originalColor:string; color:string; originalMaterial:string; material:string; colorEvidence:string; materialEvidence:string;
  configuration:string; finish:string; years:number[]; model:string; variant:string; collectedAt:string; condition:string; sold:number|null;
  warnings:string[];
@@ -60,7 +60,7 @@ export function normalize(input:Partial<Listing>&{title:string;seller:string;url
  const canonical=SELLERS.find(s=>s.name.replace(/[^a-z0-9]/gi,'').toLowerCase()===input.seller.replace(/[^a-z0-9]/gi,'').toLowerCase());
  const variantConfig=configuration(input.variant||'');const inferredConfig=configuration((input.variant||'')+' '+input.title.replace(/driver|passenger|left|right/gi,''));const cfg=variantConfig!=='Unknown'?variantConfig:inferredConfig!=='Unknown'?inferredConfig:configuration(input.title);
  const finish=/non[- ]?perforated|unperforated|solid leather/i.test(input.title)?'Solid':/perforat/i.test(input.title)?'Perforated':'Unspecified';
- const row:Listing={id:input.id||input.url,title:clean(input.title),seller:canonical?.name||input.seller,group:canonical?.group||'unclassified',url:input.url,image:input.image||null,price:input.price??null,currency:input.currency||'USD',shipping:input.shipping??null,available:input.available??null,originalColor:c.original,color:c.normalized,originalMaterial:m.original,material:m.normalized,colorEvidence:c.evidence,materialEvidence:m.evidence,configuration:cfg,finish,years:extractYears(input.title),model:modelName(input.title),variant:input.variant||'',collectedAt:input.collectedAt||new Date().toISOString(),condition:input.condition||'New',sold:input.sold??null,warnings:[...(input.warnings||[])]};
+ const row:Listing={...(input.priceContext?{priceContext:input.priceContext}:{}),id:input.id||input.url,title:clean(input.title),seller:canonical?.name||input.seller,group:canonical?.group||'unclassified',url:input.url,image:input.image||null,price:input.price??null,currency:input.currency||'USD',shipping:input.shipping??null,available:input.available??null,originalColor:c.original,color:c.normalized,originalMaterial:m.original,material:m.normalized,colorEvidence:c.evidence,materialEvidence:m.evidence,configuration:cfg,finish,years:extractYears(input.title),model:modelName(input.title),variant:input.variant||'',collectedAt:input.collectedAt||new Date().toISOString(),condition:input.condition||'New',sold:input.sold??null,warnings:[...(input.warnings||[])]};
  const variantMaterial=attribute(extra.filter(f=>f.name==='Variation data'),MATERIAL_RULES);if(variantMaterial.normalized!=='Unknown'&&variantMaterial.normalized!==m.normalized){row.material='Unknown';row.warnings.push('Title and variant material conflict; excluded from pricing');}
  if(row.configuration==='Unknown')row.warnings.push('Seat configuration needs review');
  if(row.color==='Unknown'||row.material==='Unknown')row.warnings.push('Unresolved color or material');

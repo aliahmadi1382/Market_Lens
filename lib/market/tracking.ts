@@ -17,7 +17,7 @@ export function detectPriceEvents(previous:Listing[],current:Listing[],trackId:s
  const before=new Map(previous.map(r=>[r.id,r]));const own=current.filter(r=>r.group==='own');const events:PriceEvent[]=[];
  for(const row of deduplicate(current)){
   if(row.group!=='primary'||row.price===null||!Number.isFinite(row.price)||row.price<=0)continue;
-  const old=before.get(row.id);if(!old||old.group!=='primary'||old.price===null||old.price<=0||old.currency!==row.currency||segmentKey(old)!==segmentKey(row))continue;
+  const old=before.get(row.id);if(!old||old.group!=='primary'||old.price===null||old.price<=0||old.currency!==row.currency||old.priceContext!==row.priceContext||segmentKey(old)!==segmentKey(row))continue;
   if(Math.round(old.price*100)===Math.round(row.price*100))continue;
   const ownPrice=comparableOwnPrice(row,own,observedAt);
   const undercut=ownPrice!==null&&row.available===true&&row.price<ownPrice;

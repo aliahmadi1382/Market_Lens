@@ -7,14 +7,14 @@ MarketLens is a shared automotive competitor intelligence application. It search
 - A request for **Chevy Corvette 2005–2013 searches 2004–2014**, including every intermediate year. A single year searches its previous, current, and next year. Original requested years and actual listing fitment remain distinct.
 - Product names are parsed from the query rather than limited to a dropdown of known vehicles. Chevy/Chevrolet aliases and Ford F-150/F150 spellings are normalized. Listings still require matching product terms and observed fitment.
 - All first-time searches are registered centrally and automatically tracked. Repeating the same normalized product and requested range uses the same track.
-- **Data History** organizes immutable scans under each tracked vehicle/model, provides variant price history, and can reopen previous analyses.
+- **Data History** organizes versioned scans under each tracked vehicle/model, provides variant price history, and can reopen previous analyses.
 - The sidebar lists all tracked vehicles and unread alert counts. Primary competitor price changes create notifications; a below-our-price alert requires an available own listing observed within 36 hours, with exactly matching configuration, finish, fitment, material, color, currency, and condition.
 - Failed, missing, partial, or unpriced observations never turn into zero prices or artificial deletions. Last known observations are retained separately as comparison baselines, not represented as newly collected data.
 - Central team acknowledgement, pause/resume tracking, manual refresh, filtering, exact-segment comparisons, normalization, and XLSX export are included.
 
 ## Shared storage and daily refresh
 
-Application code lives on `main`. Shared research lives on the **`market-data` branch of this repository**, in `market/index.json` and immutable `market/snapshots/<id>.json` files. The repository and its research data are **public**, as requested. Do not add confidential documents, credentials, customer information, or private costs to this data store.
+Application code lives on `main`. Shared research lives on the **`market-data` branch of this repository**, in `market/index.json` and versioned `market/snapshots/<id>.json` files. The repository and its research data are **public**, as requested. Do not add confidential documents, credentials, customer information, or private costs to this data store.
 
 The `Refresh tracked markets` GitHub Actions workflow checks once an hour, at minute 23 UTC. Each enabled model becomes due 24 hours after its previous scan. All-source failures retry after one hour. An expiring lease prevents normal overlap between a scheduled scan and manual refresh. GitHub schedule delays can occur, so refresh timing is approximately 24–25 hours plus runner delays, not a real-time guarantee. Public-repository schedules can be disabled by GitHub after 60 days without repository activity; watch the workflow status if the application is unused.
 
@@ -61,6 +61,8 @@ Run `App checks` and `Refresh tracked markets` in the GitHub Actions tab to insp
 The seller registry includes 18 accounts: 7 owned, 9 price competitors, and 2 variation references. Public collectors are configured for **US Auto Nation, Texan Auto Seat Cover, AutoSeatReplacement, theseatshop, and RichmondAutoUpholstery**. The remaining 13 accounts are identified but do not yet have public collectors. This application does not claim exhaustive internet or marketplace coverage.
 
 Shopify discovery runs a product search and a search for every year in the expanded window, deduplicates product URLs, and checks actual variant pages. Public suggestion limits and safety caps can still truncate discovery. WooCommerce discovery paginates public catalogs and filters all observed years within the window. Source-level limitations/errors remain visible and are stored in every snapshot. Bot restrictions are not bypassed.
+
+Shopify requests explicitly select the US/USD storefront context and verify USD through the public currency endpoint before recording prices. Price-change comparisons require the same collection context. Historical records affected by an earlier unverified currency assumption retain their raw values in `unverifiedPrice`/`unverifiedCurrency`, with prices excluded from analysis; correction commits preserve the audit trail.
 
 Prices are published item prices. Currency conversion, delivery charges, tax, checkout discounts, sales volume, margin, and demand are not inferred. Public feeds do not establish verified best-selling products. Unknown configuration/attributes and reference sellers are excluded from pricing recommendations. Scenarios require at least 3 comparable primary listings from 2 sellers. Catalog gaps mean unobserved in this collected sample, not proven missing from the complete owned catalog.
 
