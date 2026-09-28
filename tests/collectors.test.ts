@@ -21,3 +21,13 @@ test('changing collection market context cannot generate a price alert',()=>{
  const current={...old,price:180,priceContext:'shopify:US:USD:v1'};
  assert.equal(detectPriceEvents([old],[current],'track','run',new Date().toISOString()).length,0);
 });
+
+test('bounded catalog discovery prioritizes requested years before adjacent generations',async()=>{
+ const original=globalThis.fetch;
+ globalThis.fetch=async(input,init)=>{
+  assert.equal(init?.redirect,'manual');const page=Number(new URL(String(input)).searchParams.get('page'));
+  const data=page>2?[]:Array.from({length:30},(_,i)=>({id:page*100+i,name:`${page===1?'2008-2013':'2003-2007'} Cadillac CTS Driver Bottom Black Leather Seat Cover`,permalink:`https://usautoseatnation.com/product/seat-${page}-${i}`,prices:{price:'12000',currency_minor_unit:2,currency_code:'USD'},is_in_stock:true}));
+  return Response.json(data);
+ };
+ try{const r=await collectSource('US Auto Nation','Cadillac CTS 2003-2007');assert.equal(r.listings.length,30);assert(r.listings.every(x=>x.years.includes(2003)));assert.equal(r.source.outcome,'partial');}finally{globalThis.fetch=original;}
+});

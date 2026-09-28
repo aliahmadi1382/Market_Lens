@@ -1,16 +1,10 @@
 import {planSearch} from './search.ts';
-import {SELLERS,clean,normalize,matchesQuery,deduplicate,type Listing,type SourceStatus,type Seller} from './model.ts';
-const MAX_BYTES=4_000_000;
-async function readPublic(url:string,source:Seller,headers:Record<string,string>={}){
- const target=new URL(url);if(target.protocol!=='https:'||target.hostname!==source.domain||target.username||target.password)throw new Error('Unsupported source URL');
- const response=await fetch(target,{redirect:'error',signal:AbortSignal.timeout(18000),headers:{Accept:'application/json,text/html;q=0.8','User-Agent':'MarketLens/1.0 public-product-research',...headers}});
- if(!response.ok)throw new Error(`Store returned HTTP ${response.status}`);
- const reader=response.body?.getReader();if(!reader)throw new Error('Empty response');let size=0;const chunks:Uint8Array[]=[];
- while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>MAX_BYTES){await reader.cancel();throw new Error('Store response exceeded size limit');}chunks.push(value);}
- const all=new Uint8Array(size);let offset=0;for(const c of chunks){all.set(c,offset);offset+=c.length;}return new TextDecoder().decode(all);
-}
+import {COLLECTION_SOURCES,SELLERS,clean,normalize,matchesQuery,deduplicate,type Listing,type SourceStatus,type Seller} from './model.ts';
+import {readPublic,PublicPageError} from './public-http.ts';
+import {collectEbay,ebaySearchUrl} from './ebay.ts';
+type PublicSeller=Seller&{deadline?:number};
 function sourceQuery(q:string){const t=q.replace(/chevy|chevrolet|seat covers?|replacement|\bto\b/gi,'').replace(/\b(?:19|20)\d{2}\b/g,'').replace(/[^a-z0-9 ]/gi,' ').trim();const y=q.match(/\b(?:19|20)\d{2}\b/);return`${t}${y?' '+y[0]:''}`.trim()||q;}
-async function shopify(source:Seller,q:string){
+async function shopify(source:PublicSeller,q:string){
  const origin='https://'+source.domain;const plan=planSearch(q);
  // Read-only storefront requests share an explicit US/USD context on every host.
  const readShopify=(url:string)=>{const u=new URL(url);u.searchParams.set('currency','USD');return readPublic(u.toString(),source,{Cookie:'localization=US; cart_currency=USD'});};
@@ -22,13 +16,13 @@ async function shopify(source:Seller,q:string){
    const search=new URL('/search/suggest.json',origin);search.searchParams.set('q',sourceQuery(term));search.searchParams.set('resources[type]','product');search.searchParams.set('resources[limit]','10');search.searchParams.set('resources[options][unavailable_products]','show');
    const raw=JSON.parse(await readShopify(search.toString()));const products=raw.resources?.results?.products;if(!Array.isArray(products))throw new Error('Public product search unavailable');return products;
   }));
-  for(const result of results){if(result.status==='fulfilled'){discovered.push(...result.value);if(result.value.length>=10)capped=true}else searchErrors++}
+  for(const result of results){if(result.status==='fulfilled'){discovered.push(...result.value);if(result.value.length>=10)capped=true}else{if(result.reason instanceof PublicPageError&&result.reason.outcome==='blocked')throw result.reason;searchErrors++}}
  }
  if(searchErrors===plan.searchTerms.length)throw new Error('All public search requests failed');
  let candidates=[...new Map(discovered.filter((p:any)=>matchesQuery(p.title,q)).map((p:any)=>[new URL(p.url,origin).pathname,p])).values()];
  if(!candidates.length){
   const searchPage=new URL('/search',origin);searchPage.searchParams.set('type','product');searchPage.searchParams.set('q',plan.product);
-  try{const html=await readShopify(searchPage.toString());const paths=[...new Set([...html.matchAll(/href=["']([^"']*\/products\/[^"']+)["']/gi)].map(m=>{try{const u=new URL(m[1].replace(/&amp;/g,'&'),origin);return u.hostname===source.domain?u.pathname:null}catch{return null}}).filter(Boolean))].slice(0,30);candidates=paths.map(path=>({url:path,title:''}));capped=true;}catch{searchErrors++}
+  try{const html=await readShopify(searchPage.toString());const paths=[...new Set([...html.matchAll(/href=["']([^"']*\/products\/[^"']+)["']/gi)].map(m=>{try{const u=new URL(m[1].replace(/&amp;/g,'&'),origin);return u.hostname===source.domain?u.pathname:null}catch{return null}}).filter(Boolean))].slice(0,30);candidates=paths.map(path=>({url:path,title:''}));capped=true;}catch(e){if(e instanceof PublicPageError&&e.outcome==='blocked')throw e;searchErrors++}
  }
  if(candidates.length>100){candidates=candidates.slice(0,100);capped=true;}
  let failed=0;const collected:Listing[]=[];
@@ -44,13 +38,14 @@ async function shopify(source:Seller,q:string){
  }));for(const s of slice){if(s.status==='fulfilled')collected.push(...s.value);else failed++;}}
  return{listings:collected.slice(0,2000),message:`Searched the product and every year ${plan.minYear??''}–${plan.maxYear??''}. ${plan.searchTerms.length} searches; ${candidates.length} candidate product pages. Public suggestions return at most 10 products per search; maximum 100 product pages and 2,000 variants. ${searchErrors} search errors; ${failed} page errors. Item-only USD prices verified from the public currency endpoint; US storefront context. Sales unavailable.`,partial:capped||failed>0||searchErrors>0||collected.length>2000};
 }
-async function woo(source:Seller,q:string){
+async function woo(source:PublicSeller,q:string){
  const base='https://'+source.domain;const url=new URL('/wp-json/wc/store/v1/products',base);url.searchParams.set('search',sourceQuery(q).replace(/\b\d{4}\b/g,'').trim());url.searchParams.set('per_page','30');
  let data:any[]=[],catalogError=false;try{
   url.searchParams.set('per_page','30');
   for(let page=1;page<=20;page++){url.searchParams.set('page',String(page));const json=JSON.parse(await readPublic(url.toString(),source));if(!Array.isArray(json))throw new Error('No public catalog');data.push(...json);if(json.length<30)break;}
- }catch(e){catalogError=true;if(!data.length)return htmlSearch(source,q);}
- const matching=data.filter(p=>matchesQuery(clean(p.name),q));
+ }catch(e){if(e instanceof PublicPageError&&e.outcome==='blocked')throw e;catalogError=true;if(!data.length)return htmlSearch(source,q);}
+ const plan=planSearch(q);const priority=(p:any)=>plan.requestedYears.some(y=>normalize({title:clean(p.name),seller:source.name,url:p.permalink}).years.includes(y))?0:1;
+ const matching=data.filter(p=>matchesQuery(clean(p.name),q)).sort((a,b)=>priority(a)-priority(b));
  const listings=(await Promise.all(matching.slice(0,30).map(async p=>{
   const attributes=(p.attributes||[]).map((a:any)=>`${a.name}: ${(a.terms||[]).map((t:any)=>t.name).join(' / ')}`).join('; ');
   const variable=p.type==='variable'||p.has_options||p.prices?.price_range;const amount=Number(p.prices?.price);const price=!variable&&Number.isFinite(amount)&&amount>0?amount/10**(p.prices?.currency_minor_unit??2):null;
@@ -69,7 +64,7 @@ async function woo(source:Seller,q:string){
  if(!listings.length)return htmlSearch(source,q);
  return{listings:listings.slice(0,2000),message:'Public catalog, up to 600 candidates / 30 matching products; all years in the expanded range are checked. Variable products without exact option prices are research-only. Shipping and product sales are not provided.',partial:catalogError||data.length>=600||matching.length>30||listings.some(l=>l.price===null)};
 }
-async function htmlSearch(source:Seller,q:string){
+async function htmlSearch(source:PublicSeller,q:string){
  const origin='https://'+source.domain;const search=new URL('/',origin);search.searchParams.set('s',sourceQuery(q).replace(/\b\d{4}\b/g,'').trim());search.searchParams.set('post_type','product');
  const html=await readPublic(search.toString(),source);const urls=[...new Set([...html.matchAll(/href=["']([^"']+)["']/gi)].map(m=>{try{return new URL(m[1].replace(/&amp;/g,'&'),origin)}catch{return null}}).filter((u):u is URL=>!!u&&u.hostname===source.domain&&/\/(product|shop)\/.+\/.+/.test(u.pathname)).map(u=>u.origin+u.pathname))].slice(0,10);
  if(source.name==='RichmondAutoUpholstery'&&matchesQuery('2005-2013 Chevy Corvette C6 Replacement Leather Seat Covers',q)){
@@ -89,9 +84,16 @@ async function htmlSearch(source:Seller,q:string){
  if(!urls.length)throw new Error('Public catalog unavailable and no product links found');
  return{listings:deduplicate(listings),message:'Public search and structured product pages, capped at 10 pages. Incomplete coverage; missing prices remain unknown.',partial:true};
 }
-export async function collectSource(seller:string,q:string):Promise<{listings:Listing[];source:SourceStatus}>{
- const s=SELLERS.find(s=>s.name===seller&&s.domain&&s.adapter);if(!s)throw new Error('Unsupported source');const collectedAt=new Date().toISOString();
- const plan=planSearch(q);
- try{const result=await(s.adapter==='shopify'?shopify(s,q):woo(s,q));const rows=result.listings.map(r=>r.model==='Unknown'?{...r,model:plan.normalizedProduct,warnings:[...r.warnings,'Model identified from matched search terms']}:r);return{listings:rows,source:{seller:s.name,status:result.partial?'partial':'success',count:result.listings.length,message:result.message,url:'https://'+s.domain,collectedAt}};}
- catch(e){return{listings:[],source:{seller:s.name,status:'error',count:0,message:e instanceof Error?e.message:'Source could not be read',url:'https://'+s.domain,collectedAt}};}
+export async function collectSource(id:string,q:string):Promise<{listings:Listing[];source:SourceStatus}>{
+ const config=COLLECTION_SOURCES.find(s=>s.id===id)||COLLECTION_SOURCES.find(s=>s.seller===id);
+ if(!config)throw new Error('Unsupported source');
+ const s={...SELLERS.find(s=>s.name===config.seller)!,deadline:Date.now()+90000};const collectedAt=new Date().toISOString();const plan=planSearch(q);
+ const base={sourceId:config.id,channel:config.channel,seller:s.name,count:0,url:config.url,collectedAt,searchUrl:config.channel==='ebay'?ebaySearchUrl(s,q):config.url};
+ if(config.channel==='unconfigured')return{listings:[],source:{...base,status:'error',outcome:'not_configured',message:'Store URL has not been confirmed. This account was not searched.'}};
+ try{
+  const result=await(config.channel==='ebay'?collectEbay(s,q):s.adapter==='shopify'?shopify(s,q):woo(s,q));
+  const rows=result.listings.map(r=>r.model==='Unknown'?{...r,model:plan.normalizedProduct,warnings:[...r.warnings,'Model identified from matched search terms']}:r);
+  const blocked='blocked' in result&&result.blocked;
+  return{listings:rows,source:{...base,status:blocked&&!rows.length?'error':result.partial?'partial':'success',outcome:blocked?'blocked':result.partial?'partial':rows.length?'matches':'no_matches',searchUrl:'searchUrl' in result&&typeof result.searchUrl==='string'?result.searchUrl:base.searchUrl,count:rows.length,message:result.message}};
+ }catch(e){return{listings:[],source:{...base,status:'error',outcome:e instanceof PublicPageError?e.outcome:'failed',message:e instanceof Error?e.message:'Source could not be read'}};}
 }

@@ -1,24 +1,39 @@
 import {matchesSearch,yearValues} from './search.ts';
 export type Group = 'own' | 'primary' | 'reference' | 'unclassified';
-export type Seller = {name:string; group:Group; domain?:string; adapter?:'shopify'|'woo'};
+export type Seller = {name:string; group:Group; domain?:string; adapter?:'shopify'|'woo'; ebay?:{url:string;sellerId?:string}};
 export const SELLERS:Seller[] = [
-  {name:'US Auto Nation',group:'own',domain:'usautoseatnation.com',adapter:'woo'},
-  ...['u.s.autoseatcover','DIY Auto Upholstery','Master Auto Upholstery','US Auto Seat Factory','Premium Auto Seat Covers','DSA Seat Factory'].map(name=>({name,group:'own' as Group})),
+  {name:'US Auto Nation',group:'own',domain:'usautoseatnation.com',adapter:'woo',ebay:{url:'https://www.ebay.com/str/usautonation',sellerId:'usautonation'}},
+  {name:'u.s.autoseatcover',group:'own',ebay:{url:'https://www.ebay.com/str/usautoseatcover',sellerId:'u.s.autoseatcover'}},
+  {name:'DIY Auto Upholstery',group:'own',ebay:{url:'https://www.ebay.com/str/diyautoupholstery'}},
+  {name:'Master Auto Upholstery',group:'own',ebay:{url:'https://www.ebay.com/str/masterautoupholstery'}},
+  {name:'US Auto Seat Factory',group:'own',ebay:{url:'https://www.ebay.com/str/usautoseatfactory'}},
+  {name:'Premium Auto Seat Covers',group:'own',ebay:{url:'https://www.ebay.com/str/premiumautoseatcovers'}},
+  {name:'DSA Seat Factory',group:'own',ebay:{url:'https://www.ebay.co.uk/str/autoseatfactory'}},
   {name:'Texan Auto Seat Cover',group:'primary',domain:'texanautoseatcover.com',adapter:'shopify'},
   {name:'AutoSeatReplacement',group:'primary',domain:'autoseatreplacement.com',adapter:'shopify'},
   {name:'theseatshop',group:'primary',domain:'www.theseatshop.com',adapter:'shopify'},
-  ...['Lone Star Seat Covers','seatcoverreplacement','US Leather Car Seats','US OEM Discovery','Seat Pro','usautoupholstery'].map(name=>({name,group:'primary' as Group})),
-  {name:'AutoChampOfTexas',group:'reference'},
+  ...[['Lone Star Seat Covers','lonestarseatcovers'],['seatcoverreplacement','seatcoverreplacement'],['US Leather Car Seats','usleathercarseats'],['US OEM Discovery','usoemdiscovery'],['Seat Pro','seatpro']].map(([name,sellerId])=>({name,group:'primary' as Group,ebay:{url:`https://www.ebay.com/sch/i.html?_ssn=${sellerId}&store_name=${sellerId}&_oac=1`,sellerId}})),
+  {name:'usautoupholstery',group:'primary',ebay:{url:'https://www.ebay.com/sch/i.html?_ssn=usautoupholstery2014&store_name=usautoupholstery&_oac=1',sellerId:'usautoupholstery2014'}},
+  {name:'AutoChampOfTexas',group:'reference',ebay:{url:'https://www.ebay.com/str/autochampoftexas'}},
   {name:'RichmondAutoUpholstery',group:'reference',domain:'leather-auto-seats.com',adapter:'woo'},
 ];
+export type CollectionSource={id:string;seller:string;channel:'website'|'ebay'|'unconfigured';url:string};
+export const COLLECTION_SOURCES:CollectionSource[]=SELLERS.flatMap(s=>{
+ const sources:CollectionSource[]=[];
+ if(s.adapter&&s.domain)sources.push({id:`website:${s.name}`,seller:s.name,channel:'website',url:'https://'+s.domain});
+ if(s.ebay)sources.push({id:`ebay:${s.name}`,seller:s.name,channel:'ebay',url:s.ebay.url});
+ if(!sources.length)sources.push({id:`unconfigured:${s.name}`,seller:s.name,channel:'unconfigured',url:''});
+ return sources;
+});
 export const GROUP_NAMES:Record<Group,string> = {own:'Our Listings',primary:'Primary Competitors',reference:'Color & Material References',unclassified:'Unclassified'};
 export type Listing = {
- priceContext?:string; unverifiedPrice?:number; unverifiedCurrency?:string; id:string; title:string; seller:string; group:Group; url:string; image:string|null; price:number|null; currency:string; shipping:number|null;
+ displayedPrice?:string; priceContext?:string; unverifiedPrice?:number; unverifiedCurrency?:string; id:string; title:string; seller:string; group:Group; url:string; image:string|null; price:number|null; currency:string; shipping:number|null;
  available:boolean|null; originalColor:string; color:string; originalMaterial:string; material:string; colorEvidence:string; materialEvidence:string;
  configuration:string; finish:string; years:number[]; model:string; variant:string; collectedAt:string; condition:string; sold:number|null;
  warnings:string[];
 };
-export type SourceStatus={seller:string;status:'success'|'partial'|'error';count:number;message:string;url:string;collectedAt:string};
+export type SourceOutcome='matches'|'no_matches'|'partial'|'blocked'|'failed'|'not_configured';
+export type SourceStatus={sourceId?:string;channel?:CollectionSource['channel'];outcome?:SourceOutcome;searchUrl?:string;seller:string;status:'success'|'partial'|'error';count:number;message:string;url:string;collectedAt:string};
 export type Research={id:string;query:string;createdAt:string;listings:Listing[];sources:SourceStatus[];trackId?:string;kind?:'analysis'|'refresh'|'normalization';searchPlan?:import('./search.ts').SearchPlan};
 export type Evidence={name:string;text:string};
 export const clean=(v:unknown)=>String(v??'').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,' ').replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/&amp;/g,'&').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;|&apos;/g,"'").replace(/&nbsp;/g,' ').replace(/&#(\d+);/g,(_,n)=>String.fromCharCode(Number(n))).replace(/\s+/g,' ').trim();
@@ -69,7 +84,7 @@ export function normalize(input:Partial<Listing>&{title:string;seller:string;url
 }
 export const matchesQuery=matchesSearch;
 export function segmentKey(r:Listing){return [r.color,r.material,r.configuration,r.finish,r.model,r.years.join(','),r.currency,r.condition].join('|');}
-export const eligible=(r:Listing)=>r.group==='primary'&&r.available!==false&&r.price!==null&&r.price>0&&r.color!=='Unknown'&&r.material!=='Unknown'&&r.configuration!=='Unknown'&&r.model!=='Unknown'&&r.years.length>0;
+export const eligible=(r:Listing)=>r.group==='primary'&&r.available!==false&&r.price!==null&&r.price>0&&r.color!=='Unknown'&&r.material!=='Unknown'&&r.configuration!=='Unknown'&&r.model!=='Unknown'&&r.condition!=='Unknown'&&r.currency!=='XXX'&&r.years.length>0;
 export function quantile(a:number[],p:number){if(!a.length)return null;const sorted=[...a].sort((a,b)=>a-b),k=(sorted.length-1)*p,l=Math.floor(k);return sorted[l]+(sorted[Math.ceil(k)]-sorted[l])*(k-l);}
 export function stats(rows:Listing[]){const r=rows.filter(eligible),p=r.map(x=>x.price as number);return{count:p.length,sellers:new Set(r.map(x=>x.seller)).size,min:p.length?Math.min(...p):null,max:p.length?Math.max(...p):null,mean:p.length?p.reduce((a,b)=>a+b,0)/p.length:null,median:quantile(p,.5)};}
 export function segments(rows:Listing[]){

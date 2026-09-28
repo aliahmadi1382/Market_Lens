@@ -8,6 +8,10 @@ on:
         description: Refresh all enabled models even if not due
         type: boolean
         default: false
+      track_id:
+        description: Optional tracked model ID (leave empty for all due models)
+        type: string
+        default: ""
 permissions:
   contents: write
 concurrency:
@@ -22,14 +26,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
       - name: Refresh models whose last scan is at least 24 hours old
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MARKETLENS_DATA_REPO: ${{ github.repository }}
           FORCE: ${{ inputs.force }}
+          TRACK_ID: ${{ inputs.track_id }}
         run: |
           if [ "$FORCE" = "true" ]; then
-            node --experimental-strip-types scripts/refresh-tracked.ts --force
+            node --experimental-strip-types scripts/refresh-tracked.ts --force "--track-id=$TRACK_ID"
           else
-            node --experimental-strip-types scripts/refresh-tracked.ts
+            node --experimental-strip-types scripts/refresh-tracked.ts "--track-id=$TRACK_ID"
           fi

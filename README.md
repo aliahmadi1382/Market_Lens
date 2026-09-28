@@ -58,9 +58,15 @@ Run `App checks` and `Refresh tracked markets` in the GitHub Actions tab to insp
 
 ## Coverage and evidence limits
 
-The seller registry includes 18 accounts: 7 owned, 9 price competitors, and 2 variation references. Public collectors are configured for **US Auto Nation, Texan Auto Seat Cover, AutoSeatReplacement, theseatshop, and RichmondAutoUpholstery**. The remaining 13 accounts are identified but do not yet have public collectors. This application does not claim exhaustive internet or marketplace coverage.
+The seller registry includes **18 accounts: 7 owned, 9 price competitors, and 2 variation references**. Every account has a collector configuration. Each scan includes **19 sources: 5 public websites plus 14 eBay seller/store searches**. US Auto Nation has both a website and an eBay source; observations retain the same account classification and separate source identities.
 
-Shopify discovery runs a product search and a search for every year in the expanded window, deduplicates product URLs, and checks actual variant pages. Public suggestion limits and safety caps can still truncate discovery. WooCommerce discovery paginates public catalogs and filters all observed years within the window. Source-level limitations/errors remain visible and are stored in every snapshot. Bot restrictions are not bypassed.
+The supplied eBay URLs are mapped to the document's account groups. US Auto Nation's `usautonation` store and the remaining competitor's seller ID `usautoupholstery2014` were verified from public eBay listings. Store slugs are not assumed to equal seller IDs. Unknown or mismatched seller identities are excluded so recommended listings cannot be assigned to your accounts accidentally.
+
+Configured does not mean accessible. eBay can return HTTP 403/429, a sign-in redirect, or a security challenge. The collector stops on those responses, without attempting to bypass them, and records **Blocked by source**. A blocked page never means an empty catalog. Reliable automated access to blocked eBay accounts requires an approved data-access method beyond this public-page implementation. The app does not claim exhaustive internet or marketplace coverage.
+
+Shopify discovery runs a product search and a search for every year in the expanded window, deduplicates product URLs, and checks actual variant pages. Public suggestion limits and safety caps can still truncate discovery. WooCommerce discovery paginates public catalogs and filters all observed years within the window. Source-level limitations/errors remain visible and are stored in every snapshot. The website collector prioritizes fitment inside the requested years before adjacent-year results when a product limit is reached. eBay discovery resolves each store’s public search action to its real seller ID (the storefront search box navigates to `/sch/i.html`), searches the vehicle/product broadly, paginates up to four public result pages, and checks every year in the expanded window against observed listing fitment. The first storefront page is retained separately as a clearly labeled bounded sample. If a targeted search is blocked, matching sample listings are retained and coverage stays blocked/partial. Up to 12 matching item pages are inspected for item specifics. Price ranges remain visible for variation research but are excluded from exact-price calculations. Currency comes from each listing's published data, including non-USD prices. The default listing filter shows all currencies, and pricing aggregates require a selected currency.
+
+Source reports distinguish matches, verified no-match results, partial coverage, blocked access, failed searches, and unconfigured sources. Scans run in small batches with a 90-second budget per source. Requests use `redirect: manual`, which is supported by both Cloudflare Workers and Node; this fixes the earlier Analyze Market failure where Workers rejected `redirect: error` before any network request.
 
 Shopify requests explicitly select the US/USD storefront context and verify USD through the public currency endpoint before recording prices. Price-change comparisons require the same collection context. Historical records affected by an earlier unverified currency assumption retain their raw values in `unverifiedPrice`/`unverifiedCurrency`, with prices excluded from analysis; correction commits preserve the audit trail.
 
@@ -70,6 +76,9 @@ Prices are published item prices. Currency conversion, delivery charges, tax, ch
 
 - `lib/market/search.ts`: arbitrary product/year parsing, ±1-year expansion, match rules.
 - `lib/market/collectors.ts`: bounded public-store discovery and extraction.
+- `lib/market/ebay.ts`: eBay seller-scoped HTML parsing and item-specific enrichment.
+- `lib/market/public-http.ts`: bounded, runtime-compatible public requests and access-block detection.
+- `app/source-coverage.tsx`: per-account/source outcomes and direct source links.
 - `lib/market/model.ts`: seller classification, normalization, exact comparison segments.
 - `lib/market/tracking.ts`: snapshot, baseline, notification and due-time rules.
 - `lib/market/store.ts`: GitHub shared storage with optimistic concurrency.
