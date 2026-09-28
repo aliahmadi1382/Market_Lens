@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./glass.css";
 
 export const metadata: Metadata = {
   title: "MarketLens | Seat Cover Intelligence",
@@ -20,7 +21,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased"><a href="#research-workspace" className="skip-link">Skip to research</a>{children}</body>
     </html>
   );
 }
