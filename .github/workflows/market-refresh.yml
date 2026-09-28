@@ -1,0 +1,35 @@
+name: Refresh tracked markets
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Refresh all enabled models even if not due
+        type: boolean
+        default: false
+permissions:
+  contents: write
+concurrency:
+  group: market-refresh
+  cancel-in-progress: false
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Refresh models whose last scan is at least 24 hours old
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MARKETLENS_DATA_REPO: ${{ github.repository }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [ "$FORCE" = "true" ]; then
+            node --experimental-strip-types scripts/refresh-tracked.ts --force
+          else
+            node --experimental-strip-types scripts/refresh-tracked.ts
+          fi

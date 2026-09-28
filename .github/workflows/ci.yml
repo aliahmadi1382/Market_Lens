@@ -1,0 +1,21 @@
+name: App checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: node --experimental-strip-types --test tests/*.test.ts
+      - run: node node_modules/typescript/bin/tsc --noEmit
+      - run: node scripts/run-framework.mjs build

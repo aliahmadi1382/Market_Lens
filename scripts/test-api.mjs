@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {readFile,writeFile} from 'node:fs/promises';
+const origin='http://localhost:5173';
+const get=await fetch(origin+'/api/research');assert.equal(get.status,200);const start=await get.json();
+assert.ok(start.research.listings.length>0,'real initial data');
+const initial=JSON.parse(await readFile('data/initial.json','utf8'));
+const save=await fetch(origin+'/api/research',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(initial)});
+assert.equal(save.status,200,await save.clone().text());const saved=await save.json();
+const loaded=await(await fetch(origin+'/api/research?id='+saved.id)).json();assert.equal(loaded.listings.length,initial.listings.length);assert.equal(loaded.query,initial.query);
+const history=await(await fetch(origin+'/api/research')).json();assert.ok(history.history.some(h=>h.id===saved.id));
+const invalid=await fetch(origin+'/api/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:'x',seller:'unlisted'})});assert.equal(invalid.status,400);
+const exp=await fetch(origin+'/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(initial)});assert.equal(exp.status,200);assert.match(exp.headers.get('Content-Type'),/spreadsheetml/);await writeFile('.sites-runtime/test-export.xlsx',new Uint8Array(await exp.arrayBuffer()));
+console.log('PASS: real snapshot, durable save/load/history, rejected invalid query, XLSX export.');
