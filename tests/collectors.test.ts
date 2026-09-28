@@ -26,8 +26,8 @@ test('bounded catalog discovery prioritizes requested years before adjacent gene
  const original=globalThis.fetch;
  globalThis.fetch=async(input,init)=>{
   assert.equal(init?.redirect,'manual');const page=Number(new URL(String(input)).searchParams.get('page'));
-  const data=page>2?[]:Array.from({length:30},(_,i)=>({id:page*100+i,name:`${page===1?'2008-2013':'2003-2007'} Cadillac CTS Driver Bottom Black Leather Seat Cover`,permalink:`https://usautoseatnation.com/product/seat-${page}-${i}`,prices:{price:'12000',currency_minor_unit:2,currency_code:'USD'},is_in_stock:true}));
+  const data=page>9?[]:Array.from({length:30},(_,i)=>({id:page*100+i,name:`${page===1?'2008-2013':'2003-2007'} Cadillac CTS Driver Bottom Black Leather Seat Cover`,permalink:`https://usautoseatnation.com/product/seat-${page}-${i}`,prices:{price:'12000',currency_minor_unit:2,currency_code:'USD'},is_in_stock:true}));
   return Response.json(data);
  };
- try{const r=await collectSource('US Auto Nation','Cadillac CTS 2003-2007');assert.equal(r.listings.length,30);assert(r.listings.every(x=>x.years.includes(2003)));assert.equal(r.source.outcome,'partial');}finally{globalThis.fetch=original;}
+ try{const r=await collectSource('US Auto Nation','Cadillac CTS 2003-2007');assert.equal(r.listings.length,200);assert(r.listings.every(x=>x.years.includes(2003)));assert.equal(r.source.outcome,'partial');}finally{globalThis.fetch=original;}
 });

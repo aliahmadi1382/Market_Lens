@@ -9,13 +9,25 @@ export function isChallenge(html:string){
  return visible.length<2000&&/verify you(?:'re| are) (?:a )?human|checking your browser/i.test(visible);
 }
 export async function readPublic(url:string,source:{domain?:string;deadline?:number},headers:Record<string,string>={}){
- const target=new URL(url);
+ let target=new URL(url);
  if(target.protocol!=='https:'||target.hostname!==source.domain||target.username||target.password)throw new PublicPageError('Unsupported source URL');
- const remaining=(source.deadline??Date.now()+18000)-Date.now();
+ const deadline=source.deadline??Date.now()+36000;let redirects=0,retries=0;let response:Response;
+ while(true){
+ const remaining=deadline-Date.now();
  if(remaining<=0)throw new PublicPageError('Source time limit reached; collection is incomplete.');
- const response=await fetch(target,{redirect:'manual',signal:AbortSignal.timeout(Math.min(18000,remaining)),headers:{Accept:'application/json,text/html;q=0.8','User-Agent':'MarketLens/1.0 public-product-research',...headers}});
+ response=await fetch(target,{redirect:'manual',signal:AbortSignal.timeout(Math.min(18000,remaining)),headers:{Accept:'application/json,text/html;q=0.8','User-Agent':'MarketLens/1.0 public-product-research',...headers}});
  if([401,403,429].includes(response.status))throw new PublicPageError(`Public access blocked (HTTP ${response.status}). No claim about catalog availability can be made.`,'blocked');
- if(response.status>=300&&response.status<400){const location=response.headers.get('location')||'';if(/captcha|splashui|challenge|signin/i.test(location))throw new PublicPageError('eBay requires a security check or sign-in. Automated public search stopped.','blocked');throw new PublicPageError('The store redirected the request; collection could not be completed.');}
+ if(response.status>=300&&response.status<400){
+  const location=response.headers.get('location')||'';await response.body?.cancel();
+  if(/captcha|splashui|challenge|signin|login|auth/i.test(location))throw new PublicPageError('Store requires a security check or sign-in. Automated public search stopped.','blocked');
+  const next=new URL(location,target);
+  if(!location||next.protocol!=='https:'||next.hostname!==source.domain||next.port!==target.port||next.username||next.password||redirects++>=2)throw new PublicPageError('Unsupported store redirect; collection could not be completed.');
+  target=next;continue;
+ }
+ // One retry for transient server errors only. Access denials are never retried.
+ if([502,503,504].includes(response.status)&&retries++<1&&remaining>1000){await response.body?.cancel();await new Promise(resolve=>setTimeout(resolve,200));continue;}
+ break;
+ }
  if(!response.ok)throw new PublicPageError(`Store returned HTTP ${response.status}`);
  const reader=response.body?.getReader();if(!reader)throw new PublicPageError('Empty source response');
  const chunks:Uint8Array[]=[];let size=0;

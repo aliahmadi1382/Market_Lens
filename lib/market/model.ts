@@ -1,4 +1,4 @@
-import {matchesSearch,yearValues} from './search.ts';
+import {matchesSearch,yearValues,observedCClassModel} from './search.ts';
 import type {ItemCheck} from './known-items.ts';
 export type Group = 'own' | 'primary' | 'reference' | 'unclassified';
 export type Seller = {name:string; group:Group; domain?:string; adapter?:'shopify'|'woo'; ebay?:{url:string;sellerId?:string}};
@@ -28,6 +28,7 @@ export const COLLECTION_SOURCES:CollectionSource[]=SELLERS.flatMap(s=>{
 });
 export const GROUP_NAMES:Record<Group,string> = {own:'Our Listings',primary:'Primary Competitors',reference:'Color & Material References',unclassified:'Unclassified'};
 export type Listing = {
+ fitmentReview?:boolean; fitmentEvidence?:string;
  variationCoverage?:'unread'|'options_only'|'published_variants'|'no_options_exposed'; variationOptions?:{name:string;values:string[]}[]; parentListingId?:string;
  displayedPrice?:string; priceContext?:string; unverifiedPrice?:number; unverifiedCurrency?:string; id:string; title:string; seller:string; group:Group; url:string; image:string|null; price:number|null; currency:string; shipping:number|null;
  available:boolean|null; originalColor:string; color:string; originalMaterial:string; material:string; colorEvidence:string; materialEvidence:string;
@@ -35,7 +36,7 @@ export type Listing = {
  warnings:string[];
 };
 export type SourceOutcome='matches'|'no_matches'|'partial'|'blocked'|'failed'|'not_configured';
-export type SourceStatus={sourceId?:string;channel?:CollectionSource['channel'];outcome?:SourceOutcome;searchUrl?:string;itemChecks?:ItemCheck[];seller:string;status:'success'|'partial'|'error';count:number;message:string;url:string;collectedAt:string};
+export type SourceStatus={productCount?:number;sourceId?:string;channel?:CollectionSource['channel'];outcome?:SourceOutcome;searchUrl?:string;itemChecks?:ItemCheck[];seller:string;status:'success'|'partial'|'error';count:number;message:string;url:string;collectedAt:string};
 export type Research={id:string;query:string;createdAt:string;listings:Listing[];sources:SourceStatus[];trackId?:string;kind?:'analysis'|'refresh'|'normalization';searchPlan?:import('./search.ts').SearchPlan};
 export type Evidence={name:string;text:string};
 export const clean=(v:unknown)=>String(v??'').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,' ').replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/&amp;/g,'&').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;|&apos;/g,"'").replace(/&nbsp;/g,' ').replace(/&#(\d+);/g,(_,n)=>String.fromCharCode(Number(n))).replace(/\s+/g,' ').trim();
@@ -55,6 +56,7 @@ export function attribute(fields:Evidence[],rules:Record<string,string>){
 }
 export const extractYears=yearValues;
 export function modelName(text:string){
+ const family=observedCClassModel(text);if(family)return family;
  const t=' '+text.toLowerCase().replace(/[^a-z0-9]+/g,' ')+' ';const models=['corvette','silverado','suburban','tahoe','avalanche','camaro','sierra','yukon','escalade','mustang','f150','f250','f350','f450','f550','excursion','expedition','explorer','tundra','tacoma','highlander','wrangler','grand cherokee','ram','accord','civic'];
  const found=models.filter(m=>t.replace(/f[- ](?=\d)/g,'f').includes(' '+m+' '));return found.length?found.join(' / '):'Unknown';
 }
@@ -78,7 +80,20 @@ export function normalize(input:Partial<Listing>&{title:string;seller:string;url
  const variantConfig=configuration(input.variant||'');const inferredConfig=configuration((input.variant||'')+' '+input.title.replace(/driver|passenger|left|right/gi,''));const cfg=variantConfig!=='Unknown'?variantConfig:inferredConfig!=='Unknown'?inferredConfig:configuration(input.title);
  const finish=/non[- ]?perforated|unperforated|solid leather/i.test(input.title)?'Solid':/perforat/i.test(input.title)?'Perforated':'Unspecified';
  const row:Listing={...(input.priceContext?{priceContext:input.priceContext}:{}),id:input.id||input.url,title:clean(input.title),seller:canonical?.name||input.seller,group:canonical?.group||'unclassified',url:input.url,image:input.image||null,price:input.price??null,currency:input.currency||'USD',shipping:input.shipping??null,available:input.available??null,originalColor:c.original,color:c.normalized,originalMaterial:m.original,material:m.normalized,colorEvidence:c.evidence,materialEvidence:m.evidence,configuration:cfg,finish,years:extractYears(input.title),model:modelName(input.title),variant:input.variant||'',collectedAt:input.collectedAt||new Date().toISOString(),condition:input.condition||'New',sold:input.sold??null,warnings:[...(input.warnings||[])]};
- const variantMaterial=attribute(extra.filter(f=>f.name==='Variation data'),MATERIAL_RULES);if(variantMaterial.normalized!=='Unknown'&&variantMaterial.normalized!==m.normalized){row.material='Unknown';row.warnings.push('Title and variant material conflict; excluded from pricing');}
+ const variantFields=extra.filter(f=>f.name==='Variation data');
+ const variantMaterial=attribute(variantFields,MATERIAL_RULES);
+ if(input.variationCoverage==='published_variants'){
+  const variantColor=attribute(variantFields,COLOR_RULES);
+  if(variantMaterial.normalized!=='Unknown'){row.material=variantMaterial.normalized;row.originalMaterial=variantMaterial.original;row.materialEvidence='Variation data';}
+  if(variantColor.normalized!=='Unknown'){row.color=variantColor.normalized;row.originalColor=variantColor.original;row.colorEvidence='Variation data';}
+ }else if(variantMaterial.normalized!=='Unknown'&&variantMaterial.normalized!==m.normalized){row.material='Unknown';row.warnings.push('Title and variant material conflict; excluded from pricing');}
+ if(row.model.startsWith('mercedes c-class')){
+  row.fitmentReview=row.model.includes('body unspecified');
+  const description=extra.find(f=>f.name==='Description content')?.text;
+  if(description)row.fitmentEvidence=clean(description).slice(0,1000);
+  row.warnings.push('C-Class family match: submodel years and body style must match before treating seats as interchangeable.');
+  if(row.fitmentReview)row.warnings.push('Body style is not explicit in the title; excluded from automatic price benchmarks.');
+ }
  if(row.configuration==='Unknown')row.warnings.push('Seat configuration needs review');
  if(row.color==='Unknown'||row.material==='Unknown')row.warnings.push('Unresolved color or material');
  if(row.shipping===null)row.warnings.push('Shipping not published; item price only');
@@ -86,12 +101,12 @@ export function normalize(input:Partial<Listing>&{title:string;seller:string;url
 }
 export const matchesQuery=matchesSearch;
 export function segmentKey(r:Listing){return [r.color,r.material,r.configuration,r.finish,r.model,r.years.join(','),r.currency,r.condition].join('|');}
-export const eligible=(r:Listing)=>r.group==='primary'&&r.available!==false&&r.price!==null&&r.price>0&&r.color!=='Unknown'&&r.material!=='Unknown'&&r.configuration!=='Unknown'&&r.model!=='Unknown'&&r.condition!=='Unknown'&&r.currency!=='XXX'&&r.years.length>0;
+export const eligible=(r:Listing)=>r.group==='primary'&&!r.fitmentReview&&r.available!==false&&r.price!==null&&r.price>0&&r.color!=='Unknown'&&r.material!=='Unknown'&&r.configuration!=='Unknown'&&r.model!=='Unknown'&&r.condition!=='Unknown'&&r.currency!=='XXX'&&r.years.length>0;
 export function quantile(a:number[],p:number){if(!a.length)return null;const sorted=[...a].sort((a,b)=>a-b),k=(sorted.length-1)*p,l=Math.floor(k);return sorted[l]+(sorted[Math.ceil(k)]-sorted[l])*(k-l);}
 export function stats(rows:Listing[]){const r=rows.filter(eligible),p=r.map(x=>x.price as number);return{count:p.length,sellers:new Set(r.map(x=>x.seller)).size,min:p.length?Math.min(...p):null,max:p.length?Math.max(...p):null,mean:p.length?p.reduce((a,b)=>a+b,0)/p.length:null,median:quantile(p,.5)};}
 export function segments(rows:Listing[]){
  const groups=new Map<string,Listing[]>();for(const r of rows){const k=segmentKey(r);groups.set(k,[...(groups.get(k)||[]),r]);}
- return [...groups].map(([key,r])=>{const sample=r[0],s=stats(r),own=r.filter(x=>x.group==='own'&&x.available!==false),market=r.filter(x=>x.group==='primary'||x.group==='reference'),n=market.length;const verified=sample.color!=='Unknown'&&sample.material!=='Unknown'&&sample.configuration!=='Unknown'&&sample.model!=='Unknown'&&sample.years.length>0;const recommend=s.count>=3&&s.sellers>=2;
+ return [...groups].map(([key,r])=>{const sample=r[0],s=stats(r),own=r.filter(x=>x.group==='own'&&x.available!==false),market=r.filter(x=>x.group==='primary'||x.group==='reference'),n=market.length;const verified=!r.some(x=>x.fitmentReview)&&sample.color!=='Unknown'&&sample.material!=='Unknown'&&sample.configuration!=='Unknown'&&sample.model!=='Unknown'&&sample.years.length>0;const recommend=s.count>=3&&s.sellers>=2;
  return{key,label:`${sample.color} · ${sample.material}`,sample,rows:r,...s,own:own.length,market:n,gap:verified&&n>0&&own.length===0,aggressive:recommend?Math.round(s.min!*.99*100)/100:null,balanced:recommend?Math.round(s.median!*.98*100)/100:null,premium:recommend?quantile(r.filter(eligible).map(x=>x.price!),.75):null};}).sort((a,b)=>Number(b.gap)-Number(a.gap)||b.count-a.count||a.label.localeCompare(b.label));
 }
 export function deduplicate(rows:Listing[]){return [...new Map(rows.map(r=>[r.id,r])).values()];}

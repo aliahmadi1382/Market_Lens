@@ -1,6 +1,6 @@
 import {load} from 'cheerio/slim';
 import {clean,deduplicate,normalize,type Listing,type Seller} from './model.ts';
-import {planSearch,matchesSearch} from './search.ts';
+import {planSearch,matchesSearch,discoveryTerms} from './search.ts';
 import {readPublic,PublicPageError,isChallenge} from './public-http.ts';
 import {parseEbayItem} from './ebay-detail.ts';
 import {queuedItems,type KnownItem,type ItemCheck} from './known-items.ts';
@@ -8,13 +8,13 @@ import {ebaySellerUrl} from './ebay-urls.ts';
 type EbaySeller=Seller&{deadline?:number};
 const idFromUrl=(url:string)=>url.match(/\/itm\/(?:[^/?]+\/)?(\d{9,15})(?:[/?]|$)/)?.[1];
 const spans=(value:any):string=>typeof value==='string'?value:Array.isArray(value?.textSpans)?value.textSpans.map((x:any)=>x.text||'').join(' '):'';
-export function ebaySearchUrl(source:Seller,query:string,page=1){
+export function ebaySearchUrl(source:Seller,query:string,page=1,term?:string){
  if(!source.ebay)throw new Error('eBay store is not configured');
  const url=new URL(ebaySellerUrl(source));const plan=planSearch(query);
  // Broad product discovery avoids losing listings that publish only a range's endpoints.
  // Every year in the expanded window is checked locally against each listing's fitment.
  if(url.pathname.startsWith('/str/'))return url.toString();
- url.searchParams.set('_nkw',plan.product);
+ url.searchParams.set('_nkw',term||plan.product);
  url.searchParams.set('_pgn',String(page));url.searchParams.set('_ipg','48');return url.toString();
 }
 // Parse JSON hydration data already present in public HTML; never execute page scripts.
@@ -113,10 +113,17 @@ export async function collectEbay(source:EbaySeller,query:string,knownItems:Know
   }catch(e){blocked=e instanceof PublicPageError&&e.outcome==='blocked';problem=e instanceof Error?e.message:'Storefront unavailable';}
  }
  if(!blocked)for(const item of saved.slice(0,100)){await readItem(item.url);if(blocked||source.deadline&&Date.now()>=source.deadline)break;}
- if(!problem&&!blocked)for(let page=1;page<=20;page++){
-  try{const url=ebaySearchUrl(scoped,query,page);const result=parseEbaySearch(await readPublic(url,reader),scoped,query,url);pages++;listings.push(...result.listings);candidates.push(...result.candidates);inspected+=result.inspected;unverified+=result.unverified;
-   if(!result.hasNext)break;if(page===20)capped=true;
-  }catch(e){blocked=e instanceof PublicPageError&&e.outcome==='blocked';problem=e instanceof Error?e.message:'Search failed';break;}
+ const terms=discoveryTerms(query,'ebay');let queries=0;
+ if(!problem&&!blocked)for(const term of terms){
+  if(blocked||problem)break;
+  if(pages>=20||source.deadline&&Date.now()>=source.deadline){capped=true;break;}
+  queries++;
+  for(let page=1;page<=20;page++){
+   if(pages>=20){capped=true;break;}
+   try{const url=ebaySearchUrl(scoped,query,page,term);const result=parseEbaySearch(await readPublic(url,reader),scoped,query,url);pages++;listings.push(...result.listings);candidates.push(...result.candidates);inspected+=result.inspected;unverified+=result.unverified;
+    if(!result.hasNext)break;if(page===20)capped=true;
+   }catch(e){blocked=e instanceof PublicPageError&&e.outcome==='blocked';problem=e instanceof Error?e.message:'Search failed';break;}
+  }
  }
  if(!blocked)for(const row of deduplicate([...listings,...candidates]).filter(r=>!checked.has(r.url))){
   if(details>=100||source.deadline&&Date.now()>=source.deadline){capped=true;break;}await readItem(row.url);if(blocked)break;
@@ -127,5 +134,5 @@ export async function collectEbay(source:EbaySeller,query:string,knownItems:Know
  if(unique.length>2000)capped=true;const rows=unique.slice(0,2000);
  const pending=saved.filter(k=>!checked.has(k.url)).length,unread=rows.filter(r=>r.variationCoverage==='unread').length;
  const plan=planSearch(query);
- return{listings:rows,itemChecks,partial:capped||unverified>0||detailErrors>0||pending>0||unread>0||!!problem||rows.some(r=>r.price===null||r.variationCoverage==='options_only'||r.warnings.some(w=>w.includes('variation limit reached'))),blocked,searchUrl:ebaySearchUrl(scoped,query),message:`eBay: ${pages} keyword-search pages (${inspected} verified seller listings), plus ${storefront} storefront sample listings checked against ${plan.minYear??'all'}–${plan.maxYear??'years'}; ${rows.length} observations. ${details} item pages attempted; ${pending} saved links still pending; ${unread} observations have unread variations. ${unverified} seller identity exclusions; ${detailErrors} detail errors. Up to 20 search pages, 100 detail pages and 2,000 observations within 90 seconds; coverage may be incomplete. ${capped?'Collection limit reached. ':''}${problem}`};
+ return{listings:rows,itemChecks,partial:capped||unverified>0||detailErrors>0||pending>0||unread>0||!!problem||rows.some(r=>r.price===null||r.variationCoverage==='options_only'||r.warnings.some(w=>w.includes('variation limit reached'))),blocked,searchUrl:ebaySearchUrl(scoped,query),message:`eBay: ${queries}/${terms.length} planned keyword queries; ${pages} keyword-search pages (${inspected} verified seller listings), plus ${storefront} storefront sample listings checked against ${plan.minYear??'all'}–${plan.maxYear??'years'}; ${rows.length} observations. ${details} item pages attempted; ${pending} saved links still pending; ${unread} observations have unread variations. ${unverified} seller identity exclusions; ${detailErrors} detail errors. Up to 20 search pages, 100 detail pages and 2,000 observations within 90 seconds; coverage may be incomplete. ${capped?'Collection limit reached. ':''}${problem}`};
 }

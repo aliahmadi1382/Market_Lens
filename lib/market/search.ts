@@ -15,6 +15,48 @@ export function canonicalText(value: string) {
     .replace(/\bf[\s-]+(?=\d)/g, 'f').replace(/\bmercedes[ -]+benz\b/g, 'mercedes benz')
     .replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
+// Discovery aliases identify a family, not interchangeable parts. Fitment remains
+// attached to the observed listing and is kept separate in price comparisons.
+const C_CLASS_CODES = ['c250','c300','c350','c350e','c400','c43','c63'];
+function matchText(value:string) {
+  return canonicalText(value).replace(/\bc\s+class\b|\bcclass\b/g,'c class')
+    .replace(/\b([cweas]|glc|glk)\s+(\d{2,3}e?)\b/g,'$1$2');
+}
+function cClassQuery(value:string) { return /\bc class\b/.test(matchText(value)); }
+const BRANDS = /\b(?:mercedes benz|mercedes|chevrolet|toyota|cadillac|ford|gmc|dodge|ram|honda|jeep|nissan|lexus|acura|kia|hyundai|bmw|audi|volkswagen|volvo|mazda|subaru|lincoln|buick|pontiac)\b/g;
+export function discoveryTerms(input:string|SearchPlan,kind:'catalog'|'shopify'|'ebay'='catalog'):string[] {
+  const plan=typeof input==='string'?planSearch(input):input;
+  if(cClassQuery(plan.normalizedProduct)) {
+    if(kind==='shopify')return ['Mercedes']; // Full, paginated brand search; strict local model matching.
+    if(kind==='ebay')return ['Mercedes C Class','Mercedes C300','Mercedes C250','Mercedes C350','Mercedes C400','Mercedes C43','Mercedes C63','Mercedes W205','Mercedes C205'];
+    return ['C300','C Class','C250','C350','C400','C43','C63','W205','C205','A205'];
+  }
+  const model=plan.normalizedProduct.replace(BRANDS,' ').replace(/\s+/g,' ').trim();
+  if(kind==='ebay')return [plan.product];
+  return [...new Set([model||plan.normalizedProduct,plan.normalizedProduct])];
+}
+export function matchesProduct(title:string,input:string|SearchPlan) {
+  const plan=typeof input==='string'?planSearch(input):input;
+  const text=matchText(title),haystack=` ${text} `;
+  let tokens=matchText(plan.normalizedProduct).split(' ');
+  if(tokens.includes('mercedes')) tokens=tokens.filter(t=>t!=='benz');
+  if(cClassQuery(plan.normalizedProduct)) {
+    const explicit=/\bc class\b/.test(text);
+    // Some sellers put C300 inside a GLC-Class title; don't misclassify that SUV.
+    if(!explicit&&/\b(?:glc|glk|gla|gle|gls|slk|slc)(?:\d{2,3})?\b|\b[esa] class\b/.test(text))return false;
+    if(!explicit&&!C_CLASS_CODES.some(c=>haystack.includes(` ${c} `))&&!/\b[wcsa]205\b/.test(text))return false;
+    tokens=tokens.filter(t=>t!=='c'&&t!=='class');
+  }
+  return tokens.every(token=>haystack.includes(` ${token} `));
+}
+export function observedCClassModel(value:string):string|null {
+  const t=matchText(value);
+  if(!matchesProduct(value,'Mercedes C-Class'))return null;
+  const codes=C_CLASS_CODES.filter(c=>` ${t} `.includes(` ${c} `));
+  const chassis=[...t.matchAll(/\b[wcsa]205\b/g)].map(m=>m[0]);
+  const body=/\b(coupe|coupé|cabriolet|convertible|sedan|saloon|estate|wagon)\b/i.exec(value)?.[1].toLowerCase();
+  return `mercedes c-class · ${codes.join('/')||'submodel unspecified'} · ${[...new Set(chassis)].join('/')||'chassis unspecified'} · ${body||'body unspecified'}`;
+}
 export function yearValues(value: string): number[] {
   const years = new Set<number>();
   const expanded = value.replace(/\b((?:19|20|21)\d{2})\s*[-–—]\s*(\d{2})\b/g,
@@ -47,8 +89,7 @@ export function planSearch(input: string): SearchPlan {
 }
 export function matchesSearch(title: string, input: string | SearchPlan) {
   const plan = typeof input === 'string' ? planSearch(input) : input;
-  const haystack = ` ${canonicalText(title)} `;
-  if (!plan.normalizedProduct.split(' ').every(token=>haystack.includes(` ${token} `))) return false;
+  if (!matchesProduct(title,plan)) return false;
   const offered = yearValues(title);
   return !plan.years.length || offered.some(y=>plan.years.includes(y));
 }
