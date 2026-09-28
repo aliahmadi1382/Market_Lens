@@ -3,7 +3,10 @@ export class PublicPageError extends Error {
   constructor(message:string,outcome:'blocked'|'failed'='failed'){super(message);this.outcome=outcome;}
 }
 export function isChallenge(html:string){
- return /<title[^>]*>[^<]*(?:Security Measure|Pardon Our Interruption|Access Denied|Robot Check)/i.test(html)||/verify you(?:'re| are) (?:a )?human|checking your browser|id=["']captcha|id=["']captcha_form/i.test(html);
+ if(/<title[^>]*>[^<]*(?:Security Measure|Pardon Our Interruption|Access Denied|Robot Check|Just a moment|Challenge)/i.test(html))return true;
+ // Store themes often embed CAPTCHA libraries even on readable product pages.
+ const visible=html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'').replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi,'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+ return visible.length<2000&&/verify you(?:'re| are) (?:a )?human|checking your browser/i.test(visible);
 }
 export async function readPublic(url:string,source:{domain?:string;deadline?:number},headers:Record<string,string>={}){
  const target=new URL(url);

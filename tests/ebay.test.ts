@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {parseEbaySearch,ebaySearchUrl,enrichEbayListing,resolveEbaySeller} from '../lib/market/ebay.ts';
-import {readPublic,PublicPageError} from '../lib/market/public-http.ts';
+import {readPublic,PublicPageError,isChallenge} from '../lib/market/public-http.ts';
 import {collectSource} from '../lib/market/collectors.ts';
 import {SELLERS,COLLECTION_SOURCES,eligible} from '../lib/market/model.ts';
 const source=SELLERS.find(s=>s.name==='u.s.autoseatcover')!;
@@ -58,4 +58,9 @@ test('detail enrichment is restricted to the same canonical listing',()=>{
 test('store slugs resolve to verified seller search instead of an ignored storefront keyword',()=>{
  const seller=resolveEbaySeller(fixture(),source);const url=new URL(ebaySearchUrl(seller,'Cadillac CTS 2003-2007'));
  assert.equal(url.pathname,'/sch/i.html');assert.equal(url.searchParams.get('_ssn'),'u.s.autoseatcover');assert.equal(url.searchParams.get('_nkw'),'Cadillac CTS');
+});
+
+test('embedded anti-spam scripts do not mark a readable store page as blocked',()=>{
+ assert.equal(isChallenge('<title>Search products</title><script>const message="Verify you are human";</script><article>Cadillac CTS leather cover</article>'),false);
+ assert.equal(isChallenge('<title>Security Measure | eBay</title><p>Continue</p>'),true);
 });
